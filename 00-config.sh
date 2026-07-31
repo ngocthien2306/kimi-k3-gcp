@@ -3,7 +3,19 @@
 # Sửa các giá trị dưới đây cho phù hợp với project của bạn.
 
 export PROJECT_ID="$(gcloud config get-value project 2>/dev/null)"
-export ZONE="us-central1-a"
+
+# Zone. 01-provision.sh tự thử lần lượt ZONE_CANDIDATES khi gặp
+# ZONE_RESOURCE_POOL_EXHAUSTED (hay gặp với 16 GPU), rồi ghi zone thành công vào
+# file .zone để các script khác dùng đúng zone đó.
+# Mọi zone phải cùng REGION với bucket GCS thì transfer mới nhanh + free egress.
+export ZONE_CANDIDATES="${ZONE_CANDIDATES:-us-central1-c us-central1-f us-central1-a us-central1-b}"
+
+_ZONE_FILE="$(dirname "${BASH_SOURCE[0]}")/.zone"
+if [ -f "$_ZONE_FILE" ]; then
+  export ZONE="$(cat "$_ZONE_FILE")"
+else
+  export ZONE="${ZONE:-us-central1-c}"
+fi
 export REGION="${ZONE%-*}"
 
 export VM_NAME="kimi-k3-vm"

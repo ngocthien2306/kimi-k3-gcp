@@ -62,27 +62,60 @@ for _ in $(seq "$LOCAL_SSD_COUNT"); do
   LOCAL_SSD_FLAGS+=(--local-ssd=interface=NVME)
 done
 
-echo "==> Tạo Spot VM $VM_NAME ($MACHINE_TYPE + ${LOCAL_SSD_COUNT}x375GB local SSD)"
-gcloud compute instances create "$VM_NAME" \
-  --zone="$ZONE" \
-  --machine-type="$MACHINE_TYPE" \
-  --provisioning-model=SPOT \
-  --instance-termination-action=STOP \
-  --discard-local-ssds-at-termination-timestamp=true \
-  --max-run-duration=8h \
-  --maintenance-policy=TERMINATE \
-  --image-family=common-cu129-ubuntu-2204-nvidia-580 \
-  --image-project=deeplearning-platform-release \
-  --boot-disk-size=200GB \
-  --boot-disk-type=pd-balanced \
-  "${LOCAL_SSD_FLAGS[@]}" \
-  --scopes=https://www.googleapis.com/auth/cloud-platform \
-  --metadata="install-nvidia-driver=True"
+# Spot 16 GPU hay dính ZONE_RESOURCE_POOL_EXHAUSTED -> thử lần lượt các zone.
+# Zone đầu tiên thử là $ZONE, sau đó tới các zone còn lại trong ZONE_CANDIDATES.
+TRY_ZONES="$ZONE"
+for z in $ZONE_CANDIDATES; do
+  [ "$z" = "$ZONE" ] || TRY_ZONES="$TRY_ZONES $z"
+done
+
+CREATED_ZONE=""
+for z in $TRY_ZONES; do
+  # Chỉ thử zone cùng region với bucket, tránh phí egress giữa region
+  [ "${z%-*}" = "$REGION" ] || continue
+
+  echo "==> Thử tạo Spot VM $VM_NAME ($MACHINE_TYPE + ${LOCAL_SSD_COUNT}x375GB local SSD) tại $z"
+  if gcloud compute instances create "$VM_NAME" \
+      --zone="$z" \
+      --machine-type="$MACHINE_TYPE" \
+      --provisioning-model=SPOT \
+      --instance-termination-action=STOP \
+      --discard-local-ssds-at-termination-timestamp=true \
+      --max-run-duration=8h \
+      --maintenance-policy=TERMINATE \
+      --image-family=common-cu129-ubuntu-2204-nvidia-580 \
+      --image-project=deeplearning-platform-release \
+      --boot-disk-size=200GB \
+      --boot-disk-type=pd-balanced \
+      "${LOCAL_SSD_FLAGS[@]}" \
+      --scopes=https://www.googleapis.com/auth/cloud-platform \
+      --metadata="install-nvidia-driver=True" 2>&1 | tee /tmp/kimi-create.log; then
+    CREATED_ZONE="$z"
+    break
+  fi
+
+  if grep -q 'ZONE_RESOURCE_POOL_EXHAUSTED' /tmp/kimi-create.log; then
+    echo "    -> $z hết chỗ, thử zone tiếp theo"
+    continue
+  fi
+  echo "LỖI không phải do hết chỗ, dừng lại." >&2
+  exit 1
+done
+
+if [ -z "$CREATED_ZONE" ]; then
+  echo >&2
+  echo "LỖI: không zone nào trong '$TRY_ZONES' còn chỗ cho $MACHINE_TYPE." >&2
+  echo "     Thử lại sau, hoặc giảm về a2-highgpu-8g (8 GPU) trong 00-config.sh." >&2
+  exit 1
+fi
+
+# Ghi zone thành công để 03/04/05/06 dùng đúng zone
+echo "$CREATED_ZONE" > "$(dirname "$0")/.zone"
 
 echo
-echo "==> Xong. Bước tiếp theo (setup một lần):"
-echo "    gcloud compute scp 02-setup-vm.sh lib-mount-localssd.sh $VM_NAME:~/ --zone=$ZONE"
-echo "    gcloud compute ssh $VM_NAME --zone=$ZONE"
-echo "    # trên VM (nên chạy trong tmux):"
-echo "    export BUCKET=$BUCKET QUANT=$QUANT"
-echo "    bash ~/02-setup-vm.sh"
+echo "==> Xong. VM đang chạy tại zone: $CREATED_ZONE"
+[ "$CREATED_ZONE" = "$ZONE" ] || echo "    (đã ghi vào .zone, các script khác tự dùng zone này)"
+echo
+echo "==> Bước tiếp theo:"
+echo "    ./03-start-session.sh      # tự cài Studio + restore model từ GCS"
+echo "    ./05-update-ssh.sh         # cập nhật IP cho SSH/VS Code"
