@@ -4,6 +4,59 @@
 set -euo pipefail
 source "$(dirname "$0")/00-config.sh"
 
+# --- Chọn loại GPU ------------------------------------------------------------
+# Bỏ qua menu khi: chạy không có terminal (script/CI), hoặc đã set MACHINE_TYPE
+# ở dòng lệnh, vd:  MACHINE_TYPE=a3-ultragpu-8g ./01-provision.sh
+#
+# Bảng: machine_type | mô tả GPU | VRAM GB | RAM GB | local_ssd | quota id
+GPU_TABLE="
+a2-highgpu-8g |8x A100 40GB |320 |680  |8|PREEMPTIBLE-NVIDIA-A100-GPUS-per-project-region
+a2-ultragpu-8g|8x A100 80GB |640 |1360 |0|PREEMPTIBLE-NVIDIA-A100-80GB-GPUS-per-project-region
+a3-highgpu-8g |8x H100 80GB |640 |1872 |0|PREEMPTIBLE-NVIDIA-H100-GPUS-per-project-region
+a3-megagpu-8g |8x H100 80GB |640 |1872 |0|PREEMPTIBLE-NVIDIA-H100-GPUS-per-project-region
+a3-ultragpu-8g|8x H200 141GB|1128|2952 |0|PREEMPTIBLE-NVIDIA-H200-GPUS-per-project-region
+a4-highgpu-8g |8x B200 180GB|1440|3968 |0|PREEMPTIBLE-NVIDIA-B200-GPUS-per-project-region
+"
+
+MODEL_GB=553   # kích thước quant đang dùng, để báo có vừa VRAM không
+
+if [ -t 0 ] && [ -z "${MACHINE_TYPE_FORCED:-}" ]; then
+  echo
+  echo "  Chọn cấu hình GPU (model ~${MODEL_GB}GB):"
+  echo
+  printf "   %-3s %-16s %-14s %7s %7s  %s\n" "#" "MACHINE TYPE" "GPU" "VRAM" "RAM" "MODEL VỪA VRAM?"
+  printf "   %s\n" "------------------------------------------------------------------------------"
+  i=0
+  MT_LIST=""
+  while IFS='|' read -r mt gpu vram ram lssd _q; do
+    [ -z "${mt// /}" ] && continue
+    i=$((i+1))
+    mt="${mt// /}"; vram="${vram// /}"; ram="${ram// /}"
+    if [ "$vram" -ge "$((MODEL_GB + 40))" ]; then fit="✓ vừa, còn $((vram-MODEL_GB))GB cho KV"
+    else fit="✗ thiếu $((MODEL_GB-vram))GB -> offload ra RAM (chậm)"; fi
+    marker=" "; [ "$mt" = "$MACHINE_TYPE" ] && marker="*"
+    printf " %s %-3s %-16s %-14s %5sGB %5sGB  %s\n" "$marker" "$i)" "$mt" "$(echo $gpu)" "$vram" "$ram" "$fit"
+    MT_LIST="$MT_LIST $mt"
+  done <<< "$GPU_TABLE"
+  echo
+  echo "   (* = mặc định trong 00-config.sh)"
+  printf "   Chọn [1-%d], Enter để giữ mặc định (%s): " "$i" "$MACHINE_TYPE"
+  read -r pick || pick=""
+
+  if [ -n "$pick" ]; then
+    sel=$(echo $MT_LIST | cut -d' ' -f"$pick" 2>/dev/null || true)
+    [ -n "$sel" ] || { echo "Lựa chọn không hợp lệ: $pick" >&2; exit 1; }
+    MACHINE_TYPE="$sel"
+  fi
+fi
+
+# Lấy local_ssd count theo machine type đã chọn (ghi đè LOCAL_SSD_COUNT trong config)
+while IFS='|' read -r mt _g _v _r lssd _q; do
+  [ "${mt// /}" = "$MACHINE_TYPE" ] || continue
+  LOCAL_SSD_COUNT="${lssd// /}"
+done <<< "$GPU_TABLE"
+
+echo
 echo "==> Project: $PROJECT_ID | Zone: $ZONE | Machine: $MACHINE_TYPE"
 
 # --- 0. Preflight: check quota trước khi tạo, fail sớm với thông báo rõ ràng
@@ -43,15 +96,13 @@ print(max(vals) if vals else 0)
   echo "  ✓ $quota_id = $limit"
 }
 
-# Quota GPU tuỳ họ máy. Số GPU suy từ hậu tố machine type (a3-ultragpu-8g -> 8).
-case "$MACHINE_TYPE" in
-  a2-ultragpu-*) GPU_QUOTA="PREEMPTIBLE-NVIDIA-A100-80GB-GPUS-per-project-region" ;;
-  a2-*)          GPU_QUOTA="PREEMPTIBLE-NVIDIA-A100-GPUS-per-project-region" ;;
-  a3-ultragpu-*) GPU_QUOTA="PREEMPTIBLE-NVIDIA-H200-GPUS-per-project-region" ;;
-  a3-*)          GPU_QUOTA="PREEMPTIBLE-NVIDIA-H100-GPUS-per-project-region" ;;
-  a4-*)          GPU_QUOTA="PREEMPTIBLE-NVIDIA-B200-GPUS-per-project-region" ;;
-  *) echo "LỖI: chưa map quota cho $MACHINE_TYPE" >&2; exit 1 ;;
-esac
+# Quota ID lấy từ GPU_TABLE. Số GPU suy từ hậu tố machine type (a3-ultragpu-8g -> 8).
+GPU_QUOTA=""
+while IFS='|' read -r mt _g _v _r _l q; do
+  [ "${mt// /}" = "$MACHINE_TYPE" ] || continue
+  GPU_QUOTA="${q// /}"
+done <<< "$GPU_TABLE"
+[ -n "$GPU_QUOTA" ] || { echo "LỖI: chưa map quota cho $MACHINE_TYPE" >&2; exit 1; }
 GPU_NEED="${MACHINE_TYPE##*-}"; GPU_NEED="${GPU_NEED%g}"
 
 MISSING=0
