@@ -20,14 +20,17 @@ export REGION="${ZONE%-*}"
 
 export VM_NAME="kimi-k3-vm"
 
-# a2-megagpu-16g: 16x A100 40GB (640GB VRAM) + 96 vCPU + 1360GB RAM.
-# 640GB VRAM > model 553GB -> TOÀN BỘ model nằm trong VRAM, bỏ được CPU offload
-# (nút thắt lớn nhất: mỗi token phải kéo expert weights qua PCIe từ RAM).
-# Quota PREEMPTIBLE_NVIDIA_A100_GPUS=64 đủ cho 16 GPU, không cần xin thêm.
+# a2-highgpu-8g: 8x A100 40GB (320GB VRAM) + 96 vCPU + 680GB RAM.
+# 320GB VRAM < model 553GB -> ~233GB expert weights phải nằm ở CPU RAM, mỗi token
+# kéo qua PCIe nên chậm. Đổi lại: CHẠY ỔN ĐỊNH.
 #
-# Máy cũ: a2-highgpu-8g (8x A100 40GB = 320GB VRAM) -> 233GB model phải ở CPU RAM.
+# ĐÃ THỬ a2-megagpu-16g (16x A100 = 640GB VRAM, đủ chứa trọn model): nhanh hơn hẳn
+# về lý thuyết NHƯNG Spot bị preempt sau ~18 PHÚT - không đủ thời gian restore
+# model (~10 phút) + load vào VRAM. 16x A100 quá khan hiếm để chạy Spot.
+# Muốn 16 GPU thì phải dùng on-demand (~$59/giờ, gấp ~10 lần 8 GPU Spot).
+#
 # a2-ultragpu-8g / a3-highgpu-8g cũng đủ VRAM nhưng quota A100-80GB và H100 = 0.
-export MACHINE_TYPE="a2-megagpu-16g"
+export MACHINE_TYPE="a2-highgpu-8g"
 
 # A2 Standard KHÔNG kèm local SSD (khác a2-ultragpu) -> phải gắn thủ công.
 # a2-highgpu-8g CHỈ chấp nhận đúng 0 hoặc 8 local SSD (không cho số lẻ khác).
