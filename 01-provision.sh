@@ -7,40 +7,56 @@ source "$(dirname "$0")/00-config.sh"
 echo "==> Project: $PROJECT_ID | Zone: $ZONE | Machine: $MACHINE_TYPE"
 
 # --- 0. Preflight: check quota trước khi tạo, fail sớm với thông báo rõ ràng
+#
+# DÙNG Cloud Quotas API (`gcloud beta quotas`), KHÔNG dùng
+# `gcloud compute regions describe`. API legacy đó báo SAI/THIẾU:
+#   - PREEMPTIBLE_LOCAL_SSD_GB báo 0 trong khi thật ra unlimited
+#   - H100/H200/B200 không xuất hiện dù quota đã có sẵn 64
 echo "==> Kiểm tra quota"
-QJSON=$(gcloud compute regions describe "$REGION" --format=json)
 check_quota() {
-  local metric="$1" need="$2"
+  local quota_id="$1" need="$2"
   local limit
-  limit=$(echo "$QJSON" | python3 -c "
+  limit=$(gcloud beta quotas info describe "$quota_id" \
+            --service=compute.googleapis.com --project="$PROJECT_ID" \
+            --format=json 2>/dev/null \
+          | python3 -c "
 import json,sys
-qs=json.load(sys.stdin)['quotas']
-print(next((q['limit'] for q in qs if q['metric']=='$metric'), 0))
-")
-  if (( $(echo "$limit < $need" | bc -l) )); then
-    echo "  ✗ $metric = $limit (cần >= $need)" >&2
+try:
+    d=json.load(sys.stdin)
+except Exception:
+    print(0); raise SystemExit
+infos=d.get('dimensionsInfos') or []
+vals=[i.get('details',{}).get('value') for i in infos]
+vals=[int(v) for v in vals if v is not None]
+print(max(vals) if vals else 0)
+" 2>/dev/null)
+  limit="${limit:-0}"
+
+  if [ "$limit" = "-1" ]; then
+    echo "  ✓ $quota_id = unlimited"
+    return 0
+  fi
+  if [ "$limit" -lt "$need" ] 2>/dev/null; then
+    echo "  ✗ $quota_id = $limit (cần >= $need)" >&2
     return 1
   fi
-  echo "  ✓ $metric = $limit"
+  echo "  ✓ $quota_id = $limit"
 }
 
-# Quota GPU tuỳ machine type: ultragpu dùng A100 80GB, highgpu/megagpu dùng A100 40GB
+# Quota GPU tuỳ họ máy. Số GPU suy từ hậu tố machine type (a3-ultragpu-8g -> 8).
 case "$MACHINE_TYPE" in
-  *ultragpu*) GPU_QUOTA="PREEMPTIBLE_NVIDIA_A100_80GB_GPUS" ;;
-  *)          GPU_QUOTA="PREEMPTIBLE_NVIDIA_A100_GPUS" ;;
+  a2-ultragpu-*) GPU_QUOTA="PREEMPTIBLE-NVIDIA-A100-80GB-GPUS-per-project-region" ;;
+  a2-*)          GPU_QUOTA="PREEMPTIBLE-NVIDIA-A100-GPUS-per-project-region" ;;
+  a3-ultragpu-*) GPU_QUOTA="PREEMPTIBLE-NVIDIA-H200-GPUS-per-project-region" ;;
+  a3-*)          GPU_QUOTA="PREEMPTIBLE-NVIDIA-H100-GPUS-per-project-region" ;;
+  a4-*)          GPU_QUOTA="PREEMPTIBLE-NVIDIA-B200-GPUS-per-project-region" ;;
+  *) echo "LỖI: chưa map quota cho $MACHINE_TYPE" >&2; exit 1 ;;
 esac
-GPU_NEED="${MACHINE_TYPE##*-}"; GPU_NEED="${GPU_NEED%g}"   # a2-ultragpu-8g -> 8
+GPU_NEED="${MACHINE_TYPE##*-}"; GPU_NEED="${GPU_NEED%g}"
 
 MISSING=0
-check_quota "$GPU_QUOTA" "$GPU_NEED"          || MISSING=1
-check_quota PREEMPTIBLE_CPUS 96               || MISSING=1
-
-# KHÔNG check PREEMPTIBLE_LOCAL_SSD_GB ở đây: metric regional trong
-# `gcloud compute regions describe` là API legacy và báo 0 sai lệch.
-# Quota thật là ZONAL (PREEMPTIBLE-LOCAL-SSD-GB-per-project-zone), mặc định
-# unlimited (-1, isFixed). Kiểm tra nếu cần:
-#   gcloud beta quotas info describe PREEMPTIBLE-LOCAL-SSD-GB-per-project-zone \
-#     --service=compute.googleapis.com --project=$PROJECT_ID
+check_quota "$GPU_QUOTA" "$GPU_NEED"                    || MISSING=1
+check_quota "PREEMPTIBLE-CPUS-per-project-region" 96    || MISSING=1
 
 if [ "$MISSING" -eq 1 ]; then
   cat >&2 <<EOF
