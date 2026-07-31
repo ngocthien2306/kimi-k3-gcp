@@ -20,22 +20,24 @@ export REGION="${ZONE%-*}"
 
 export VM_NAME="kimi-k3-vm"
 
-# a2-highgpu-8g: 8x A100 40GB (320GB VRAM) + 96 vCPU + 680GB RAM.
-# 320GB VRAM < model 553GB -> ~233GB expert weights phải nằm ở CPU RAM, mỗi token
-# kéo qua PCIe nên chậm. Đổi lại: CHẠY ỔN ĐỊNH.
+# a2-ultragpu-8g: 8x A100 80GB (640GB VRAM) + 96 vCPU + 1360GB RAM.
+# 640GB VRAM > model 553GB -> TOÀN BỘ model trong VRAM, bỏ được CPU offload.
+# Chỉ 8 GPU nên ít khan hiếm hơn 16x A100 40GB -> rủi ro preempt thấp hơn.
+# (Quota A100-80GB đã xin và được duyệt = 8, ngày 2026-07-31.)
 #
-# ĐÃ THỬ a2-megagpu-16g (16x A100 = 640GB VRAM, đủ chứa trọn model): nhanh hơn hẳn
-# về lý thuyết NHƯNG Spot bị preempt sau ~18 PHÚT - không đủ thời gian restore
-# model (~10 phút) + load vào VRAM. 16x A100 quá khan hiếm để chạy Spot.
-# Muốn 16 GPU thì phải dùng on-demand (~$59/giờ, gấp ~10 lần 8 GPU Spot).
+# LỊCH SỬ ĐÃ THỬ:
+#  - a2-highgpu-8g  (8x A100 40GB = 320GB VRAM): chạy ỔN ĐỊNH > 1 tiếng, nhưng
+#    ~233GB expert weights phải ở CPU RAM -> mỗi token kéo qua PCIe, CHẬM.
+#  - a2-megagpu-16g (16x A100 40GB = 640GB VRAM): đủ VRAM nhưng Spot bị preempt
+#    sau ~18 PHÚT, không kịp restore (~10 phút) + load model. Quá khan hiếm.
 #
-# a2-ultragpu-8g / a3-highgpu-8g cũng đủ VRAM nhưng quota A100-80GB và H100 = 0.
-export MACHINE_TYPE="a2-highgpu-8g"
+# Nếu a2-ultragpu-8g cũng hay bị preempt -> quay lại a2-highgpu-8g (chậm mà chắc),
+# hoặc dùng on-demand (quota on-demand A100-80GB cũng đã có = 8).
+export MACHINE_TYPE="a2-ultragpu-8g"
 
-# A2 Standard KHÔNG kèm local SSD (khác a2-ultragpu) -> phải gắn thủ công.
-# a2-highgpu-8g CHỈ chấp nhận đúng 0 hoặc 8 local SSD (không cho số lẻ khác).
-# 8 x 375 GiB = 3 TB - dư sức chứa quant 594GB, kể cả Q8 lossless (1.56TB).
-export LOCAL_SSD_COUNT=8
+# a2-ultragpu ĐÃ KÈM SẴN local SSD -> đặt 0, KHÔNG gắn thủ công.
+# (Chỉ A2 Standard như a2-highgpu-8g mới cần gắn tay, và chỉ nhận đúng 0 hoặc 8.)
+export LOCAL_SSD_COUNT=0
 
 # Bucket lưu model (rẻ hơn nhiều so với để trên persistent disk)
 export BUCKET="gs://${PROJECT_ID}-kimi-k3-models"

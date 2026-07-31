@@ -24,8 +24,15 @@ print(next((q['limit'] for q in qs if q['metric']=='$metric'), 0))
   echo "  ✓ $metric = $limit"
 }
 
+# Quota GPU tuỳ machine type: ultragpu dùng A100 80GB, highgpu/megagpu dùng A100 40GB
+case "$MACHINE_TYPE" in
+  *ultragpu*) GPU_QUOTA="PREEMPTIBLE_NVIDIA_A100_80GB_GPUS" ;;
+  *)          GPU_QUOTA="PREEMPTIBLE_NVIDIA_A100_GPUS" ;;
+esac
+GPU_NEED="${MACHINE_TYPE##*-}"; GPU_NEED="${GPU_NEED%g}"   # a2-ultragpu-8g -> 8
+
 MISSING=0
-check_quota PREEMPTIBLE_NVIDIA_A100_GPUS 8    || MISSING=1
+check_quota "$GPU_QUOTA" "$GPU_NEED"          || MISSING=1
 check_quota PREEMPTIBLE_CPUS 96               || MISSING=1
 
 # KHÔNG check PREEMPTIBLE_LOCAL_SSD_GB ở đây: metric regional trong
@@ -57,10 +64,16 @@ fi
 #   giữ lại boot disk + config để start lại nhanh.
 # --max-run-duration : chốt trần thời gian chạy, tránh quên tắt máy đốt tiền.
 # --local-ssd x N : A2 Standard không kèm local SSD sẵn, phải gắn thủ công (375GiB/cái).
+#   a2-ultragpu ĐÃ có sẵn -> LOCAL_SSD_COUNT=0, mảng rỗng.
 LOCAL_SSD_FLAGS=()
-for _ in $(seq "$LOCAL_SSD_COUNT"); do
-  LOCAL_SSD_FLAGS+=(--local-ssd=interface=NVME)
-done
+if [ "${LOCAL_SSD_COUNT:-0}" -gt 0 ]; then
+  for _ in $(seq "$LOCAL_SSD_COUNT"); do
+    LOCAL_SSD_FLAGS+=(--local-ssd=interface=NVME)
+  done
+  SSD_NOTE="+ ${LOCAL_SSD_COUNT}x375GB local SSD"
+else
+  SSD_NOTE="(local SSD kèm sẵn theo machine type)"
+fi
 
 # Spot 16 GPU hay dính ZONE_RESOURCE_POOL_EXHAUSTED -> thử lần lượt các zone.
 # Zone đầu tiên thử là $ZONE, sau đó tới các zone còn lại trong ZONE_CANDIDATES.
@@ -74,7 +87,7 @@ for z in $TRY_ZONES; do
   # Chỉ thử zone cùng region với bucket, tránh phí egress giữa region
   [ "${z%-*}" = "$REGION" ] || continue
 
-  echo "==> Thử tạo Spot VM $VM_NAME ($MACHINE_TYPE + ${LOCAL_SSD_COUNT}x375GB local SSD) tại $z"
+  echo "==> Thử tạo Spot VM $VM_NAME ($MACHINE_TYPE $SSD_NOTE) tại $z"
   if gcloud compute instances create "$VM_NAME" \
       --zone="$z" \
       --machine-type="$MACHINE_TYPE" \
