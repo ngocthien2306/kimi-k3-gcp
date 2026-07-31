@@ -1,5 +1,6 @@
 # Ghi chú cá nhân - chứa project ID, tên bucket, username thật
 HUONG-DAN.txt
+GCLOUD-LENH.txt
 
 # Config ghi đè riêng của từng máy (nếu tạo)
 config.local.sh
