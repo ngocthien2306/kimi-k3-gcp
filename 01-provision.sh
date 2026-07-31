@@ -75,17 +75,33 @@ else
   SSD_NOTE="(local SSD kèm sẵn theo machine type)"
 fi
 
-# Spot 16 GPU hay dính ZONE_RESOURCE_POOL_EXHAUSTED -> thử lần lượt các zone.
-# Zone đầu tiên thử là $ZONE, sau đó tới các zone còn lại trong ZONE_CANDIDATES.
-TRY_ZONES="$ZONE"
-for z in $ZONE_CANDIDATES; do
-  [ "$z" = "$ZONE" ] || TRY_ZONES="$TRY_ZONES $z"
+# GPU Spot hay dính ZONE_RESOURCE_POOL_EXHAUSTED -> thử lần lượt nhiều zone.
+# Nhưng KHÔNG phải zone nào cũng có machine type (vd a2-ultragpu-8g chỉ có ở
+# us-central1-a và -c) -> hỏi GCP xem zone nào thực sự hỗ trợ, thay vì đoán.
+echo "==> Tìm zone hỗ trợ $MACHINE_TYPE trong $REGION"
+SUPPORTED=$(gcloud compute machine-types list \
+  --filter="name=$MACHINE_TYPE AND zone~^$REGION" \
+  --format="value(zone)" 2>/dev/null | tr '\n' ' ')
+
+if [ -z "$SUPPORTED" ]; then
+  echo "LỖI: $MACHINE_TYPE không có ở region $REGION." >&2
+  echo "     Các zone có machine type này:" >&2
+  gcloud compute machine-types list --filter="name=$MACHINE_TYPE" \
+    --format="value(zone)" 2>/dev/null | sed 's/^/       /' >&2
+  exit 1
+fi
+echo "    zone hỗ trợ: $SUPPORTED"
+
+# Ưu tiên $ZONE trước, rồi tới thứ tự trong ZONE_CANDIDATES, cuối cùng là phần còn lại
+TRY_ZONES=""
+for z in $ZONE $ZONE_CANDIDATES $SUPPORTED; do
+  case " $SUPPORTED " in *" $z "*) ;; *) continue ;; esac   # bỏ zone không hỗ trợ
+  case " $TRY_ZONES " in *" $z "*) continue ;; esac         # bỏ trùng
+  TRY_ZONES="$TRY_ZONES $z"
 done
 
 CREATED_ZONE=""
 for z in $TRY_ZONES; do
-  # Chỉ thử zone cùng region với bucket, tránh phí egress giữa region
-  [ "${z%-*}" = "$REGION" ] || continue
 
   echo "==> Thử tạo Spot VM $VM_NAME ($MACHINE_TYPE $SSD_NOTE) tại $z"
   if gcloud compute instances create "$VM_NAME" \
@@ -107,8 +123,8 @@ for z in $TRY_ZONES; do
     break
   fi
 
-  if grep -q 'ZONE_RESOURCE_POOL_EXHAUSTED' /tmp/kimi-create.log; then
-    echo "    -> $z hết chỗ, thử zone tiếp theo"
+  if grep -qE 'ZONE_RESOURCE_POOL_EXHAUSTED|does not exist in zone' /tmp/kimi-create.log; then
+    echo "    -> $z không dùng được lúc này, thử zone tiếp theo"
     continue
   fi
   echo "LỖI không phải do hết chỗ, dừng lại." >&2
@@ -116,9 +132,19 @@ for z in $TRY_ZONES; do
 done
 
 if [ -z "$CREATED_ZONE" ]; then
-  echo >&2
-  echo "LỖI: không zone nào trong '$TRY_ZONES' còn chỗ cho $MACHINE_TYPE." >&2
-  echo "     Thử lại sau, hoặc giảm về a2-highgpu-8g (8 GPU) trong 00-config.sh." >&2
+  cat >&2 <<EOF
+
+LỖI: không zone nào trong '$TRY_ZONES' còn chỗ cho $MACHINE_TYPE.
+
+Lựa chọn:
+  1. Đợi rồi thử lại (capacity Spot thay đổi liên tục)
+  2. Đổi sang machine type ít khan hiếm hơn trong 00-config.sh:
+       export MACHINE_TYPE="a2-highgpu-8g"   # 8x A100 40GB, đã chạy ổn định
+  3. Dùng on-demand thay vì Spot (quota on-demand A100-80GB đã có = 8):
+       sửa --provisioning-model=SPOT thành STANDARD trong file này,
+       và bỏ --instance-termination-action / --discard-local-ssds-at-...
+       LƯU Ý: on-demand ~\$29-59/giờ, KHÔNG tự tắt khi hết --max-run-duration.
+EOF
   exit 1
 fi
 
