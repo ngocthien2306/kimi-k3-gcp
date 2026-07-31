@@ -8,14 +8,16 @@ source "$(dirname "$0")/00-config.sh"
 # Bỏ qua menu khi: chạy không có terminal (script/CI), hoặc đã set MACHINE_TYPE
 # ở dòng lệnh, vd:  MACHINE_TYPE=a3-ultragpu-8g ./01-provision.sh
 #
-# Bảng: machine_type | mô tả GPU | VRAM GB | RAM GB | local_ssd | quota id
+# Bảng: machine_type | mô tả GPU | VRAM GB | RAM GB | local_ssd | quota id | boot disk type
+# LƯU Ý boot disk: dòng mới (A3 Ultra/H200, A4/B200) KHÔNG nhận pd-balanced,
+# phải dùng hyperdisk-balanced ("pd-balanced disk type cannot be used by ...").
 GPU_TABLE="
-a2-highgpu-8g |8x A100 40GB |320 |680  |8|PREEMPTIBLE-NVIDIA-A100-GPUS-per-project-region
-a2-ultragpu-8g|8x A100 80GB |640 |1360 |0|PREEMPTIBLE-NVIDIA-A100-80GB-GPUS-per-project-region
-a3-highgpu-8g |8x H100 80GB |640 |1872 |0|PREEMPTIBLE-NVIDIA-H100-GPUS-per-project-region
-a3-megagpu-8g |8x H100 80GB |640 |1872 |0|PREEMPTIBLE-NVIDIA-H100-GPUS-per-project-region
-a3-ultragpu-8g|8x H200 141GB|1128|2952 |0|PREEMPTIBLE-NVIDIA-H200-GPUS-per-project-region
-a4-highgpu-8g |8x B200 180GB|1440|3968 |0|PREEMPTIBLE-NVIDIA-B200-GPUS-per-project-region
+a2-highgpu-8g |8x A100 40GB |320 |680  |8|PREEMPTIBLE-NVIDIA-A100-GPUS-per-project-region      |pd-balanced
+a2-ultragpu-8g|8x A100 80GB |640 |1360 |0|PREEMPTIBLE-NVIDIA-A100-80GB-GPUS-per-project-region |pd-balanced
+a3-highgpu-8g |8x H100 80GB |640 |1872 |0|PREEMPTIBLE-NVIDIA-H100-GPUS-per-project-region      |pd-balanced
+a3-megagpu-8g |8x H100 80GB |640 |1872 |0|PREEMPTIBLE-NVIDIA-H100-GPUS-per-project-region      |pd-balanced
+a3-ultragpu-8g|8x H200 141GB|1128|2952 |0|PREEMPTIBLE-NVIDIA-H200-GPUS-per-project-region      |hyperdisk-balanced
+a4-highgpu-8g |8x B200 180GB|1440|3968 |0|PREEMPTIBLE-NVIDIA-B200-GPUS-per-project-region      |hyperdisk-balanced
 "
 
 MODEL_GB=553   # kích thước quant đang dùng, để báo có vừa VRAM không
@@ -28,7 +30,7 @@ if [ -t 0 ] && [ -z "${MACHINE_TYPE_FORCED:-}" ]; then
   printf "   %s\n" "------------------------------------------------------------------------------"
   i=0
   MT_LIST=""
-  while IFS='|' read -r mt gpu vram ram lssd _q; do
+  while IFS='|' read -r mt gpu vram ram lssd _q _d; do
     [ -z "${mt// /}" ] && continue
     i=$((i+1))
     mt="${mt// /}"; vram="${vram// /}"; ram="${ram// /}"
@@ -50,11 +52,15 @@ if [ -t 0 ] && [ -z "${MACHINE_TYPE_FORCED:-}" ]; then
   fi
 fi
 
-# Lấy local_ssd count theo machine type đã chọn (ghi đè LOCAL_SSD_COUNT trong config)
-while IFS='|' read -r mt _g _v _r lssd _q; do
+# Lấy local_ssd count + boot disk type theo machine type đã chọn
+# (ghi đè LOCAL_SSD_COUNT trong 00-config.sh)
+BOOT_DISK_TYPE=""
+while IFS='|' read -r mt _g _v _r lssd _q disk; do
   [ "${mt// /}" = "$MACHINE_TYPE" ] || continue
   LOCAL_SSD_COUNT="${lssd// /}"
+  BOOT_DISK_TYPE="$(echo $disk)"
 done <<< "$GPU_TABLE"
+[ -n "$BOOT_DISK_TYPE" ] || { echo "LỖI: $MACHINE_TYPE không có trong GPU_TABLE" >&2; exit 1; }
 
 echo
 echo "==> Project: $PROJECT_ID | Zone: $ZONE | Machine: $MACHINE_TYPE"
@@ -98,7 +104,7 @@ print(max(vals) if vals else 0)
 
 # Quota ID lấy từ GPU_TABLE. Số GPU suy từ hậu tố machine type (a3-ultragpu-8g -> 8).
 GPU_QUOTA=""
-while IFS='|' read -r mt _g _v _r _l q; do
+while IFS='|' read -r mt _g _v _r _l q _d; do
   [ "${mt// /}" = "$MACHINE_TYPE" ] || continue
   GPU_QUOTA="${q// /}"
 done <<< "$GPU_TABLE"
@@ -170,7 +176,7 @@ done
 CREATED_ZONE=""
 for z in $TRY_ZONES; do
 
-  echo "==> Thử tạo Spot VM $VM_NAME ($MACHINE_TYPE $SSD_NOTE) tại $z"
+  echo "==> Thử tạo Spot VM $VM_NAME ($MACHINE_TYPE $SSD_NOTE, boot=$BOOT_DISK_TYPE) tại $z"
   if gcloud compute instances create "$VM_NAME" \
       --zone="$z" \
       --machine-type="$MACHINE_TYPE" \
@@ -182,7 +188,7 @@ for z in $TRY_ZONES; do
       --image-family=common-cu129-ubuntu-2204-nvidia-580 \
       --image-project=deeplearning-platform-release \
       --boot-disk-size=200GB \
-      --boot-disk-type=pd-balanced \
+      --boot-disk-type="$BOOT_DISK_TYPE" \
       ${LOCAL_SSD_FLAGS[@]+"${LOCAL_SSD_FLAGS[@]}"} \
       --scopes=https://www.googleapis.com/auth/cloud-platform \
       --metadata="install-nvidia-driver=True" 2>&1 | tee /tmp/kimi-create.log; then
