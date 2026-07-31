@@ -25,7 +25,7 @@ print(next((q['limit'] for q in qs if q['metric']=='$metric'), 0))
 }
 
 MISSING=0
-check_quota PREEMPTIBLE_NVIDIA_A100_GPUS 8    || MISSING=1
+check_quota PREEMPTIBLE_NVIDIA_A100_GPUS 16   || MISSING=1
 check_quota PREEMPTIBLE_CPUS 96               || MISSING=1
 
 # KHÔNG check PREEMPTIBLE_LOCAL_SSD_GB ở đây: metric regional trong

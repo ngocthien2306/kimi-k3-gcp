@@ -24,6 +24,13 @@ source "$(dirname "$0")/lib-mount-localssd.sh"
 mount_localssd
 mkdir -p "$HF_HOME/hub"
 
+# Cài Unsloth Studio nếu VM còn mới (cho phép tạo lại VM mà không cần 02-setup-vm.sh)
+if [ ! -x "$HOME/.unsloth/studio/unsloth_studio/bin/unsloth" ]; then
+  echo "==> Chưa có Unsloth Studio, đang cài..."
+  curl -fsSL https://unsloth.ai/install.sh | sh
+  grep -q 'HF_HOME' ~/.bashrc || echo "export HF_HOME=$HF_HOME" >> ~/.bashrc
+fi
+
 # Restore model từ GCS (in-region: nhanh + không mất phí egress)
 # "WARNING: Skipping symlink ..." là BÌNH THƯỜNG - rsync không xử lý symlink,
 # phần đó được khôi phục bằng tarball ở bước dưới. Lọc bớt cho đỡ rối.

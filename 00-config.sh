@@ -8,10 +8,14 @@ export REGION="${ZONE%-*}"
 
 export VM_NAME="kimi-k3-vm"
 
-# a2-highgpu-8g: 8x A100 40GB (320GB VRAM) + 96 vCPU + 680GB RAM = 1,000GB RAM+VRAM.
-# Chọn máy này thay vì a2-ultragpu-4g (cùng tổng 1,000GB) vì project đã có sẵn
-# quota PREEMPTIBLE_NVIDIA_A100_GPUS=64, trong khi quota A100 80GB = 0.
-export MACHINE_TYPE="a2-highgpu-8g"
+# a2-megagpu-16g: 16x A100 40GB (640GB VRAM) + 96 vCPU + 1360GB RAM.
+# 640GB VRAM > model 553GB -> TOÀN BỘ model nằm trong VRAM, bỏ được CPU offload
+# (nút thắt lớn nhất: mỗi token phải kéo expert weights qua PCIe từ RAM).
+# Quota PREEMPTIBLE_NVIDIA_A100_GPUS=64 đủ cho 16 GPU, không cần xin thêm.
+#
+# Máy cũ: a2-highgpu-8g (8x A100 40GB = 320GB VRAM) -> 233GB model phải ở CPU RAM.
+# a2-ultragpu-8g / a3-highgpu-8g cũng đủ VRAM nhưng quota A100-80GB và H100 = 0.
+export MACHINE_TYPE="a2-megagpu-16g"
 
 # A2 Standard KHÔNG kèm local SSD (khác a2-ultragpu) -> phải gắn thủ công.
 # a2-highgpu-8g CHỈ chấp nhận đúng 0 hoặc 8 local SSD (không cho số lẻ khác).

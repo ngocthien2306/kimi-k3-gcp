@@ -46,7 +46,15 @@ fi
 command -v hf >/dev/null 2>&1 || { echo "LỖI: không tìm thấy lệnh 'hf'" >&2; exit 1; }
 grep -q '.local/bin' ~/.bashrc || echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
 
-# --- 3. Tải model vào HF cache (KHÔNG dùng --local-dir, để Studio auto-detect)
+# --- 3. Nếu GCS ĐÃ có model thì bỏ qua hẳn - khỏi tải lại 600GB từ HuggingFace.
+# Trường hợp hay gặp: tạo lại VM (đổi machine type) sau khi đã tải model lần đầu.
+if gcloud storage ls "$BUCKET/hf-meta.tar.gz" >/dev/null 2>&1; then
+  echo "==> Model đã có sẵn trên GCS -> BỎ QUA tải/backup."
+  echo "    Chỉ cần chạy 03-start-session.sh từ máy Mac, nó tự restore."
+  exit 0
+fi
+
+# --- Tải model vào HF cache (KHÔNG dùng --local-dir, để Studio auto-detect)
 echo "==> Tải quant $QUANT (~600GB, sẽ mất khá lâu)"
 hf download unsloth/Kimi-K3-GGUF \
   --include "*${QUANT}*" --include "*${MMPROJ}*" \
