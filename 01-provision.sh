@@ -100,7 +100,7 @@ for z in $TRY_ZONES; do
       --image-project=deeplearning-platform-release \
       --boot-disk-size=200GB \
       --boot-disk-type=pd-balanced \
-      "${LOCAL_SSD_FLAGS[@]}" \
+      ${LOCAL_SSD_FLAGS[@]+"${LOCAL_SSD_FLAGS[@]}"} \
       --scopes=https://www.googleapis.com/auth/cloud-platform \
       --metadata="install-nvidia-driver=True" 2>&1 | tee /tmp/kimi-create.log; then
     CREATED_ZONE="$z"
