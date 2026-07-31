@@ -53,8 +53,17 @@ hf download unsloth/Kimi-K3-GGUF \
   --max-workers 16
 
 # --- 4. Backup HF cache lên GCS để các phiên sau khỏi tải lại từ HuggingFace
-echo "==> Backup lên GCS: $BUCKET"
+echo "==> Backup blobs lên GCS: $BUCKET"
 gcloud storage rsync -r "$HF_HOME/hub" "$BUCKET/hf-hub"
+
+# QUAN TRỌNG: HF cache để file thật trong blobs/, còn snapshots/ chỉ là symlink
+# trỏ vào blobs. `gcloud storage rsync` BỎ QUA symlink -> nếu chỉ rsync thì khi
+# restore se co du lieu nhung khong co snapshots/ va Studio không thấy model.
+# -> Backup riêng phần symlink bằng tar (giữ nguyên symlink, chỉ vài KB).
+echo "==> Backup cấu trúc symlink (snapshots/refs)"
+tar czf /tmp/hf-meta.tar.gz -C "$HF_HOME/hub" --exclude=blobs .
+gcloud storage cp /tmp/hf-meta.tar.gz "$BUCKET/hf-meta.tar.gz"
+rm -f /tmp/hf-meta.tar.gz
 
 echo
 echo "==> Setup xong. Thoát SSH và chạy 03-start-session.sh từ máy local."

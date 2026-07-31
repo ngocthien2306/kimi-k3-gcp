@@ -30,7 +30,8 @@ export MMPROJ="mmproj-BF16.gguf"           # cần cho vision
 # Unsloth Studio tự phát hiện model nằm trong HuggingFace cache.
 # Đặt cache lên local SSD (1.5TB, đi kèm sẵn a2-ultragpu-4g) để Studio thấy được.
 export HF_HOME="/mnt/localssd/hf"
-export STUDIO_PORT="8888"
+export STUDIO_PORT="8888"        # port Studio chạy TRÊN VM
+export LOCAL_PORT="${LOCAL_PORT:-8888}"  # port trên máy Mac (đổi nếu bị Jupyter chiếm)
 
 # Cách cho người khác truy cập Unsloth Studio:
 #   tunnel     - chỉ mình bạn, qua SSH tunnel (an toàn nhất, mặc định)

@@ -35,7 +35,7 @@ case "$EXPOSE" in
     echo "  (cần đã chạy ./06-open-firewall.sh; IP đổi mỗi lần start VM)"
     ;;
   *)
-    echo "  Unsloth Studio UI:  http://localhost:$STUDIO_PORT"
+    echo "  Unsloth Studio UI:  http://localhost:$LOCAL_PORT"
     ;;
 esac
 echo "======================================================================"
@@ -44,9 +44,15 @@ echo "  'GGUF hardware controls' để chỉnh MoE expert offload / multi-GPU."
 echo
 
 if [ "$EXPOSE" = "tunnel" ]; then
+  # Nếu port local đã bị chiếm (vd Jupyter), tự tìm port trống kế tiếp
+  while lsof -nP -iTCP:"$LOCAL_PORT" -sTCP:LISTEN >/dev/null 2>&1; do
+    echo "  (port $LOCAL_PORT đang bận, thử $((LOCAL_PORT + 1)))"
+    LOCAL_PORT=$((LOCAL_PORT + 1))
+  done
+  echo "  Truy cập: http://localhost:$LOCAL_PORT"
   echo "  Ctrl-C để đóng tunnel (VM VẪN CHẠY - nhớ chạy ./04-stop-session.sh)"
   echo "======================================================================"
-  gcloud compute ssh "$VM_NAME" --zone="$ZONE" -- -N -L "$STUDIO_PORT:localhost:$STUDIO_PORT"
+  gcloud compute ssh "$VM_NAME" --zone="$ZONE" -- -N -L "$LOCAL_PORT:localhost:$STUDIO_PORT"
 else
   echo "  VM VẪN CHẠY - nhớ chạy ./04-stop-session.sh khi xong"
   echo "======================================================================"

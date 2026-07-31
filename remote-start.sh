@@ -7,13 +7,46 @@ BUCKET="${BUCKET:?}"
 export HF_HOME="${HF_HOME:-/mnt/localssd/hf}"
 STUDIO_PORT="${STUDIO_PORT:-8888}"
 
+# SSH không tương tác KHÔNG nạp ~/.bashrc. Ngoài ra `nohup unsloth` (resolve qua
+# PATH, đi qua symlink ~/.local/bin/unsloth) vẫn báo "No such file or directory".
+# -> Gọi thẳng binary trong venv bằng ĐƯỜNG DẪN TUYỆT ĐỐI cho chắc.
+export PATH="$HOME/.local/bin:$PATH"
+UNSLOTH_BIN="$HOME/.unsloth/studio/unsloth_studio/bin/unsloth"
+if [ ! -x "$UNSLOTH_BIN" ]; then
+  UNSLOTH_BIN=$(command -v unsloth 2>/dev/null || true)
+fi
+[ -n "$UNSLOTH_BIN" ] || {
+  echo "LỖI: không tìm thấy 'unsloth'. Cài lại: curl -fsSL https://unsloth.ai/install.sh | sh" >&2
+  exit 1
+}
+
 source "$(dirname "$0")/lib-mount-localssd.sh"
 mount_localssd
 mkdir -p "$HF_HOME/hub"
 
 # Restore model từ GCS (in-region: nhanh + không mất phí egress)
-echo "==> Restore model từ GCS (~600GB)"
+echo "==> Restore blobs từ GCS (~600GB)"
 gcloud storage rsync -r "$BUCKET/hf-hub" "$HF_HOME/hub"
+
+# rsync bỏ qua symlink -> phải bung lại snapshots/ từ tarball, nếu không
+# Studio sẽ không thấy model dù blobs đã có đủ.
+echo "==> Khôi phục cấu trúc symlink"
+if gcloud storage cp "$BUCKET/hf-meta.tar.gz" /tmp/hf-meta.tar.gz 2>/dev/null; then
+  tar xzf /tmp/hf-meta.tar.gz -C "$HF_HOME/hub"
+  rm -f /tmp/hf-meta.tar.gz
+else
+  echo "CẢNH BÁO: không có $BUCKET/hf-meta.tar.gz" >&2
+  echo "          Studio có thể không thấy model. Tạo lại bằng (trên VM):" >&2
+  echo "          tar czf /tmp/hf-meta.tar.gz -C $HF_HOME/hub --exclude=blobs . && \\" >&2
+  echo "          gcloud storage cp /tmp/hf-meta.tar.gz $BUCKET/hf-meta.tar.gz" >&2
+fi
+
+# Kiểm tra symlink có trỏ đúng không (broken symlink = restore hỏng)
+BROKEN=$(find "$HF_HOME/hub" -xtype l 2>/dev/null | wc -l)
+if [ "$BROKEN" -gt 0 ]; then
+  echo "CẢNH BÁO: có $BROKEN symlink hỏng trong HF cache" >&2
+  find "$HF_HOME/hub" -xtype l 2>/dev/null | head -3 >&2
+fi
 
 # Khởi động Unsloth Studio.
 #   EXPOSE=tunnel     (mặc định) bind localhost, chỉ vào được qua SSH tunnel - an toàn nhất
@@ -29,9 +62,10 @@ case "$EXPOSE" in
 esac
 
 echo "==> Khởi động Unsloth Studio (EXPOSE=$EXPOSE, port $STUDIO_PORT)"
-pkill -f 'unsloth studio' 2>/dev/null || true
-sleep 2
-nohup unsloth studio "${STUDIO_ARGS[@]}" > ~/unsloth-studio.log 2>&1 &
+# Pattern 'unsloth[ ]studio' để pkill KHÔNG tự khớp command line của chính nó
+pkill -f 'unsloth[ ]studio' 2>/dev/null || true
+sleep 3
+nohup "$UNSLOTH_BIN" studio "${STUDIO_ARGS[@]}" > ~/unsloth-studio.log 2>&1 < /dev/null &
 
 echo "==> Chờ Studio khởi động..."
 for _ in $(seq 30); do
