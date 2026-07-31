@@ -7,29 +7,32 @@ BUCKET="${BUCKET:?}"
 export HF_HOME="${HF_HOME:-/mnt/localssd/hf}"
 STUDIO_PORT="${STUDIO_PORT:-8888}"
 
-# SSH không tương tác KHÔNG nạp ~/.bashrc. Ngoài ra `nohup unsloth` (resolve qua
-# PATH, đi qua symlink ~/.local/bin/unsloth) vẫn báo "No such file or directory".
-# -> Gọi thẳng binary trong venv bằng ĐƯỜNG DẪN TUYỆT ĐỐI cho chắc.
 export PATH="$HOME/.local/bin:$PATH"
-UNSLOTH_BIN="$HOME/.unsloth/studio/unsloth_studio/bin/unsloth"
-if [ ! -x "$UNSLOTH_BIN" ]; then
-  UNSLOTH_BIN=$(command -v unsloth 2>/dev/null || true)
-fi
-[ -n "$UNSLOTH_BIN" ] || {
-  echo "LỖI: không tìm thấy 'unsloth'. Cài lại: curl -fsSL https://unsloth.ai/install.sh | sh" >&2
-  exit 1
-}
 
 source "$(dirname "$0")/lib-mount-localssd.sh"
 mount_localssd
 mkdir -p "$HF_HOME/hub"
 
-# Cài Unsloth Studio nếu VM còn mới (cho phép tạo lại VM mà không cần 02-setup-vm.sh)
+# Cài Unsloth Studio nếu VM còn mới (cho phép tạo lại VM mà không cần 02-setup-vm.sh).
+# PHẢI đứng TRƯỚC bước resolve UNSLOTH_BIN bên dưới.
 if [ ! -x "$HOME/.unsloth/studio/unsloth_studio/bin/unsloth" ]; then
-  echo "==> Chưa có Unsloth Studio, đang cài..."
+  echo "==> Chưa có Unsloth Studio, đang cài (vài phút)..."
   curl -fsSL https://unsloth.ai/install.sh | sh
   grep -q 'HF_HOME' ~/.bashrc || echo "export HF_HOME=$HF_HOME" >> ~/.bashrc
 fi
+
+# SSH không tương tác KHÔNG nạp ~/.bashrc. Ngoài ra `nohup unsloth` (resolve qua
+# PATH, đi qua symlink ~/.local/bin/unsloth) vẫn báo "No such file or directory".
+# -> Gọi thẳng binary trong venv bằng ĐƯỜNG DẪN TUYỆT ĐỐI cho chắc.
+UNSLOTH_BIN="$HOME/.unsloth/studio/unsloth_studio/bin/unsloth"
+if [ ! -x "$UNSLOTH_BIN" ]; then
+  UNSLOTH_BIN=$(command -v unsloth 2>/dev/null || true)
+fi
+[ -n "$UNSLOTH_BIN" ] || {
+  echo "LỖI: cài Unsloth Studio thất bại. Thử thủ công trên VM:" >&2
+  echo "     curl -fsSL https://unsloth.ai/install.sh | sh" >&2
+  exit 1
+}
 
 # Restore model từ GCS (in-region: nhanh + không mất phí egress)
 # "WARNING: Skipping symlink ..." là BÌNH THƯỜNG - rsync không xử lý symlink,
