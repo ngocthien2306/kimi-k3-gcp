@@ -25,8 +25,11 @@ mount_localssd
 mkdir -p "$HF_HOME/hub"
 
 # Restore model từ GCS (in-region: nhanh + không mất phí egress)
+# "WARNING: Skipping symlink ..." là BÌNH THƯỜNG - rsync không xử lý symlink,
+# phần đó được khôi phục bằng tarball ở bước dưới. Lọc bớt cho đỡ rối.
 echo "==> Restore blobs từ GCS (~600GB)"
-gcloud storage rsync -r "$BUCKET/hf-hub" "$HF_HOME/hub"
+gcloud storage rsync -r "$BUCKET/hf-hub" "$HF_HOME/hub" 2>&1 \
+  | grep -v 'Skipping symlink' || true
 
 # rsync bỏ qua symlink -> phải bung lại snapshots/ từ tarball, nếu không
 # Studio sẽ không thấy model dù blobs đã có đủ.
@@ -67,11 +70,21 @@ pkill -f 'unsloth[ ]studio' 2>/dev/null || true
 sleep 3
 nohup "$UNSLOTH_BIN" studio "${STUDIO_ARGS[@]}" > ~/unsloth-studio.log 2>&1 < /dev/null &
 
-echo "==> Chờ Studio khởi động..."
-for _ in $(seq 30); do
-  grep -qiE 'https?://|api key|listening' ~/unsloth-studio.log 2>/dev/null && break
+# Đợi đến khi port THỰC SỰ listen. Grep log không đủ: log in ra trước khi
+# server bind xong -> tunnel mở sớm và báo "connect failed: Connection refused".
+echo "==> Chờ Studio bind port $STUDIO_PORT..."
+READY=0
+for _ in $(seq 60); do
+  if ss -tln 2>/dev/null | grep -q ":$STUDIO_PORT "; then READY=1; break; fi
   sleep 2
 done
+
+if [ "$READY" -eq 0 ]; then
+  echo "LỖI: Studio không bind được port $STUDIO_PORT sau 120s" >&2
+  tail -20 ~/unsloth-studio.log >&2
+  exit 1
+fi
+echo "==> Studio đã sẵn sàng trên port $STUDIO_PORT"
 
 if [ "$EXPOSE" = "cloudflare" ]; then
   echo
