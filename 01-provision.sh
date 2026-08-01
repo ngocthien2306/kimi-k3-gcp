@@ -151,19 +151,30 @@ fi
 # GPU Spot hay dính ZONE_RESOURCE_POOL_EXHAUSTED -> thử lần lượt nhiều zone.
 # Nhưng KHÔNG phải zone nào cũng có machine type (vd a2-ultragpu-8g chỉ có ở
 # us-central1-a và -c) -> hỏi GCP xem zone nào thực sự hỗ trợ, thay vì đoán.
-echo "==> Tìm zone hỗ trợ $MACHINE_TYPE trong $REGION"
-SUPPORTED=$(gcloud compute machine-types list \
-  --filter="name=$MACHINE_TYPE AND zone~^$REGION" \
+echo "==> Tìm zone hỗ trợ $MACHINE_TYPE"
+ALL_ZONES=$(gcloud compute machine-types list --filter="name=$MACHINE_TYPE" \
   --format="value(zone)" 2>/dev/null | tr '\n' ' ')
+[ -n "$ALL_ZONES" ] || { echo "LỖI: không tìm thấy machine type $MACHINE_TYPE ở đâu cả." >&2; exit 1; }
+
+# Ưu tiên tuyệt đối zone cùng region với bucket (transfer nội vùng: nhanh, FREE egress).
+IN_REGION=""; OUT_REGION=""
+for z in $ALL_ZONES; do
+  if [ "${z%-*}" = "$REGION" ]; then IN_REGION="$IN_REGION $z"
+  # Chỉ mở rộng sang các region US khác, tránh egress liên lục địa (đắt hơn nhiều)
+  elif [ "${ALLOW_CROSS_REGION:-1}" = "1" ] && case "$z" in us-*) true ;; *) false ;; esac; then
+    OUT_REGION="$OUT_REGION $z"
+  fi
+done
+SUPPORTED="$IN_REGION$OUT_REGION"
+
+echo "    cùng region ($REGION):${IN_REGION:- (không có)}"
+[ -n "$OUT_REGION" ] && echo "    region US khác        :$OUT_REGION"
 
 if [ -z "$SUPPORTED" ]; then
-  echo "LỖI: $MACHINE_TYPE không có ở region $REGION." >&2
-  echo "     Các zone có machine type này:" >&2
-  gcloud compute machine-types list --filter="name=$MACHINE_TYPE" \
-    --format="value(zone)" 2>/dev/null | sed 's/^/       /' >&2
+  echo "LỖI: $MACHINE_TYPE không dùng được. Các zone có machine type này:" >&2
+  echo "     $ALL_ZONES" >&2
   exit 1
 fi
-echo "    zone hỗ trợ: $SUPPORTED"
 
 # Ưu tiên $ZONE trước, rồi tới thứ tự trong ZONE_CANDIDATES, cuối cùng là phần còn lại
 TRY_ZONES=""
@@ -227,6 +238,21 @@ echo "$CREATED_ZONE" > "$(dirname "$0")/.zone"
 echo
 echo "==> Xong. VM đang chạy tại zone: $CREATED_ZONE"
 [ "$CREATED_ZONE" = "$ZONE" ] || echo "    (đã ghi vào .zone, các script khác tự dùng zone này)"
+
+if [ "${CREATED_ZONE%-*}" != "$REGION" ]; then
+  cat <<EOF
+
+  ⚠️  VM ở region ${CREATED_ZONE%-*} nhưng bucket model ở $REGION.
+      Mỗi phiên restore ~595GB qua region sẽ mất phí egress (~\$0.02/GB
+      trong nội địa US) => khoảng \$12/phiên, cộng thêm thời gian.
+
+      Nếu định dùng lâu dài ở region này, copy bucket sang đó một lần:
+        gcloud storage buckets create ${BUCKET}-${CREATED_ZONE%-*} \\
+          --location=${CREATED_ZONE%-*} --uniform-bucket-level-access
+        gcloud storage rsync -r $BUCKET ${BUCKET}-${CREATED_ZONE%-*}
+      rồi đổi BUCKET trong 00-config.sh.
+EOF
+fi
 echo
 echo "==> Bước tiếp theo:"
 echo "    ./03-start-session.sh      # tự cài Studio + restore model từ GCS"
